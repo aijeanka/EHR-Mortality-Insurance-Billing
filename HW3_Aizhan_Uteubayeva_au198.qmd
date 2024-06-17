@@ -1,0 +1,203 @@
+---
+title: "HIDS6002: Homework 3"
+author: "Aizhan Uteubayeva"
+date: "2023-09-18"
+output: pdf_document
+editor_options: 
+  markdown: 
+    wrap: sentence
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+#| warning: false
+library(tidyverse)     # loads the tidyverse tools
+library(RPostgres)     # loads the database driver for PostgreSQL
+library(connections)   # helps RPostgres work with RStudio
+library(keyring)       # access to a local encrypted keychain for passwords
+
+con <- connection_open(RPostgres::Postgres(),
+          dbname = "syntheticMGUH",
+          host = "34.85.177.140",
+          user = "hids502_student",
+          password = key_get(service = "syntheticmguh", 
+                             username = "hids502_student"))
+```
+
+## 1) Morbidity and Mortality
+
+What are the top 3 causes of morbidity (illness) and the top 3 causes of mortality (death) in the US?
+In the Synthea data set, how would you estimate similar answers?
+(Hint - LOINC code '69453-9' is 'Cause of Death \[US Standard Certificate of Death\]' and can be found in the `observations` table. Patients have encounters, which in turn have observations. This is where the cause of death is recorded. Illnesses can be found in the `conditions` table (i.e., diagnosis made a different encounters).
+
+### Mortality
+
+```{sql connection=con}
+SELECT value, COUNT(*) AS mortality      
+FROM observations
+WHERE code = '69453-9'
+GROUP BY value
+ORDER BY mortality DESC
+LIMIT 3;
+```
+
+Answer: According to the National Center for Health Statistics (NCHS), the top 3 causes of mortality in 2021 were hear disease, cancer and COVID-19 ("FastStats," 2023).
+Using the code block for mortality, we have revealed that in the Synthea the top 3 causes of death are End-stage renal disease/disorder, chronic congestive heart failure/disorder and acute ST segment elevation myocardial infraction/disorder.
+Within the code we have not specified the year for the top causes, so we have counted all events starting from 2010 till 2023.
+The extrapolated data correlated to real-world data by including the types of heart disease, however in reality, the kidney disorder takes way below after respiratory diseases, diabetes, etc.
+We did not get cancer, as it should be desired.
+
+Code explanation: In the code, I have retrieved the "value" column, which has the description of what is recorded, from `observations` tables; where I want to extract only the rows with matching code of `69453-9`.
+I have grouped it by `value` column in the descending order and limited the results to top three outcomes.
+
+### Morbidity
+
+```{sql connection=con}
+SELECT description, COUNT(*) AS morbidity
+FROM conditions
+GROUP BY description 
+ORDER BY morbidity  DESC
+LIMIT 3;
+```
+
+According to the Blue Cross and Blue Shields (BCBS) National Health Index conducted in 2021, the top impact-full illness that affect the wellness of patients are: major depressive disorder, hypertension and high cholesterol ("National Health Index \| Blue Cross Blue Shield," n.d.).
+The Synthea database has shown the most frequent events occurring in encounters.
+The refill of the medication is certainly one the most reasons for an appointment, however the code needs the improvement to reveal other causes.
+
+Code explanation: In the code, I have retrieved the `description` column, which has the description of the condition, from `conditions` tables; where I want to count it in the descending order and limit to only top 3 rows.
+
+## 2) Insurance
+
+What is the breakdown of spending between Medicaid, Medicare and everything else in the US?
+Why do you think it might break down this way?
+In the Synthea data set, how would you estimate similar answers?
+(Hint: This will require you to look at the `encounters` table and join it against the `payers` table where you will find the names of the payers. You will likely find this easier to do for a single year, e.g 2022!.)
+
+```{sql connection=con}
+SELECT payer_name, SUM(payer_coverage) AS total_spent
+FROM
+(SELECT 
+CASE WHEN p.name in ('Medicare', 'Medicaid') THEN p.name ELSE 'Others' END AS payer_name, e.payer_coverage
+FROM encounters e
+JOIN payers p ON e.payer = p.id
+WHERE e.start >= '2022-01-01 00:00:00' AND  e.stop <= '2022-12-30 23:59:59'
+) T
+GROUP BY payer_name;
+
+```
+
+Answer: According to the National Health Expenditure data from Centers for Medicare and Medicaid Services, in 2021 the total expenditure for Medicare estimated around 900.8 billion USD, meanwhile for the Medicaid the number reaches the approximate of 734.0 billion USD.
+The sample outcomes that we have derived from the Synthea for the 2022, do not reach such estimates due the smaller sample data of 57,000 patients.
+In addition the Medicaid is represented to have larges spent amount compared to the real world.
+It would be more accurate to investigate the amount spent per patient, per immunization or per prescription.
+
+Code: In order to look into the spending breakdown, two major companies were extracted with the rest falling under the "others'. First, I have selected the `payer_name` adding up the total sum of `payer_coverage` (the sum paid for the patient by the insurance) and aliased as total_spent. The data to extract from was conditioned by the names"Medicare","Medicaid" with the `ELSE` falling into the "Others" category. Two tables were joined by `payers` in the `encounters` and `id` in the `payers`. The dates were set for the total spent in 2022 using the iso8601 UTC Date (yyyy-MM-dd'T'HH:mm'Z') format, using the `start` and `stop` fields in the `encounters` table.
+
+## 3) Lack of Insurance
+
+What percent of Americans are estimated to be uninsured in the United States?
+How has this changed over the past 15 years, and why?
+In the Synthea data set, how would you estimate similar answers?
+(Hint - Every encounter in Synthea has a payer ID - there is actually an entry in the `payers` table for "No Insurance", rather than the payer ID being NULL in the `encounters` table. Each encounter has insurance information associated with it, but if you want to know someone's insurance status at any given time you need the 'payer_transitions' table which is a history of patient's insurance coverage.)
+
+```{sql connection=con}
+with total_patients_2010 AS (SELECT COUNT(id) AS total_patients FROM patients),
+total_patients_2023 AS (SELECT COUNT(id) AS total_patients FROM patients WHERE deathdate is  NULL),
+
+uninsured_patients_2010 AS (SELECT COUNT(DISTINCT e.patient) AS uninsured_americans
+FROM encounters e
+JOIN payers p ON e.payer = p.id
+WHERE (e.start >= '2010-01-01 00:00:00' AND  e.stop <= '2010-12-30 23:59:59') 
+AND p.name = 'NO_INSURANCE'),
+
+uninsured_patients_2023 AS (SELECT COUNT(DISTINCT e.patient) AS uninsured_americans
+FROM encounters e
+JOIN payers p ON e.payer = p.id
+WHERE (e.start >= '2023-01-01 00:00:00' AND e.stop <= '2023-12-30 23:59:59') 
+AND p.name = 'NO_INSURANCE')
+
+SELECT 
+t3.uninsured_americans AS uninsured_2010 , t1.total_patients  AS total_patients_2010,
+t4.uninsured_americans AS uninsured_2023 , t2.total_patients AS total_aptient_2023
+FROM 
+total_patients_2010 t1,
+total_patients_2023 t2,
+uninsured_patients_2010 t3,
+uninsured_patients_2023 t4
+```
+
+Answer: According to the NCHS 2023 report, 8.4% or 26.7 million Americans did not have health insurance in 2022 (Cohen, 2022).
+The number has decreased by two-fold compared to 2010 ("Products - NHIS Early Release - Health Insurance - 2010," 2019), an Using Synthea, we have look at the earliest date (2010) and the latest (2023) available.
+The percentage is estimated by diving the uninsured/total_patients in a certain year.
+In 2010 4.8% of patients were uninsured, the number has dropped in 2023, estimating 4.3% of uninsured individuals.It might be that Synthea correlated with trend by the decreased number patients and does not have new patients, new subscriptions or rejection of the subscription was not mentioned in the code.
+
+Code explanation: In order to answer the question, first, the total number of patients was retrieved for each year using the `SELECT COUNT` function from `patients` table.
+For the 2023, the number of dead patients was eliminates with the condition that `deathdate` is `NULL`.
+Secondly, the number of uninsured patients in 2023 was estimated by retrieving patient field from `encounters` table and `JOIN` the table by `payer=id` fields.
+The condition to choose persons with no insurance in `payers` table is set by `p.name = 'NO_INSURANCE'`.
+As well as the condition to choose the time in set format of iso8601 UTC Date (yyyy-MM-dd'T'HH:mm'Z') using `start` and `stop` fields from encounters table.
+Thirdly, the selected values are from created at the beginning to output.
+
+## Surprise Billing
+
+What is meant by "surprise billing" in the US?
+How common is this?
+What is the magnitude of surprise billing (eg, the range in prices billed)?
+How would you find evidence of this in the Synthea data set?
+Show whether it exists or does not exist in Synthea.
+(Hint - this is difficult, and you will get full points for any thoughtful attempt that runs. One way to think about it would to look for patients that appeared to have insurance the time of the encounter (`payer_transitions` table) but whose encounter was billed to `NO_INSURANCE`.
+Another would be to look for encounters where there was a valid payer but no-reimbursement by the payer (eg `payer_coverage` = 0), but this could also be just declined coverage!)
+
+```{sql connection=con}
+SELECT COUNT(DISTINCT patient)
+FROM
+payer_transitions pt
+JOIN payers p ON pt.payer = p.id
+WHERE p.name = 'NO_INSURANCE'
+AND patient IN 
+(SELECT DISTINCT patient
+FROM 
+encounters e 
+JOIN payers p ON e.payer = p.id
+WHERE p.name != 'NO_INSURANCE')
+```
+
+```{sql connection=con}
+SELECT COUNT(DISTINCT patient) AS insured_patients
+FROM 
+encounters e 
+JOIN payers p ON e.payer = p.id
+WHERE p.name != 'NO_INSURANCE'
+```
+
+Answer: Surprise Medical Billings occur when the patient has an active insurance, the system has billed the patient for the encounter as if a person does not have it.
+In has been revealed that 40% of the US insured patients had received a surprise billing (Pollitz et al., 2020).
+The Synthea, however, has shown only 5% of the insured patients receiving the surprise billing.
+
+Code Explanation: First, by joining the `payer_transitions` and `payers` table with the common key (`pt.payer = p.id`), the distinct patients were pulled `payer_transitions` table with billing to `NO_INSURANCE`, using `AND` we look that apparently the distinct patients from `encounters` `WHERE` they had insurance (`p.name != 'NO_INSURANCE'`).
+The intersection of both groups was counted.
+Second, the total of `insured_patients` was calculated by counting the distinct patients from `encounters` by matching with (`e.payer = p.id`), and condition with the name field not equal to `NO_INSURANCE`.
+
+## References
+
+Cohen, R.A., 2022.
+Health insurance coverage: Early release of estimates from the National Health Interview Survey, 2022.
+FastStats \[WWW Document\], 2023.
+URL https://www.cdc.gov/nchs/fastats/leading-causes-of-death.htm (accessed 9.17.23).
+
+National Health Index \| Blue Cross Blue Shield \[WWW Document\], n.d.
+URL https://www.bcbs.com/the-health-of-america/health-index/national-health-index (accessed 9.18.23).
+
+NHE Fact Sheet \| CMS \[WWW Document\], n.d.
+URL https://www.cms.gov/data-research/statistics-trends-and-reports/national-health-expenditure-data/nhe-fact-sheet (accessed 9.18.23).
+
+Pollitz, K., Lopes, L., Kearney, A., Rae, M., Cox, C., Fehr, R., Rousseau, D., Kaiser Family Foundation, 2020.
+US Statistics on Surprise Medical Billing.
+JAMA 323, 498.
+https://doi.org/10.1001/jama.2020.0065
+
+Products - NHIS Early Release - Health Insurance - 2010 \[WWW Document\], 2019.
+URL https://www.cdc.gov/nchs/data/nhis/earlyrelease/insur201106.htm (accessed 9.18.23).
