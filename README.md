@@ -147,7 +147,3 @@ WHERE p.name != 'NO_INSURANCE');
 - [NHE Fact Sheet | CMS](https://www.cms.gov/data-research/statistics-trends-and-reports/national-health-expenditure-data/nhe-fact-sheet), n.d.
 - Pollitz, K., et al., 2020. US Statistics on Surprise Medical Billing. JAMA 323, 498.
 - [Products - NHIS Early Release - Health Insurance - 2010](https://www.cdc.gov/nchs/data/nhis/earlyrelease/insur201106.htm), 2019.
-
----
-
-This README provides an overview of the project, installation instructions, connection setup, and detailed analysis steps along with references.
